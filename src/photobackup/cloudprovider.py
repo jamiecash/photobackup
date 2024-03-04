@@ -15,6 +15,7 @@ from googleapiclient.discovery import build
 import logging
 import os
 import pandas as pd
+import urllib.request
 
 class CloudProvider(metaclass=abc.ABCMeta):
     """
@@ -58,14 +59,14 @@ class CloudProvider(metaclass=abc.ABCMeta):
         """
         raise NotImplementedError
 
-    def save_media_item(id: str, filename: str):
+    def save_media_item(self, id: str, filename: str):
         """
         Get the specified media item and saves it to disk.
 
         Arguments:
             id (str): The id of the media item to get as required by your cloud
                 providers get media api.
-            filename (str)@ The filename to save the media item as.
+            filename (str): The filename to save the media item as.
         """
         raise NotImplementedError
     
@@ -116,11 +117,12 @@ class GoogleCloudProvider(CloudProvider):
         """
        
         # Get the media items from the Google API. We will use a page size of 100.
-        # This will take a while. 
+        # This will take a while so we will log the times. 
         items = []
         nextpagetoken = None
         start = datetime.now()
         self._log.info(f"Started creating list at {start.strftime('%H:%M:%S')}.")
+        
         while nextpagetoken != '':
             self._log.debug(f"Number of items processed: {len(items)}.")
             results = self._api.mediaItems().list(
@@ -140,11 +142,35 @@ class GoogleCloudProvider(CloudProvider):
         photos = pd.concat(
             [
                 df.drop('mediaMetadata', axis=1), 
-                dfmeta.drop('photo', axis=1), 
-                dfmeta.photo.apply(pd.Series)
+                dfmeta.drop(['photo', 'video'], axis=1), 
+                dfmeta['photo'].apply(pd.Series).drop(0, axis=1),
+                dfmeta['video'].apply(pd.Series).drop(0, axis=1)
             ], axis=1)
+        
+        # Convert columns to correct datatypes
+        photos['creationTime'] = pd.to_datetime(photos['creationTime'])
+        dtypes = {
+            'width': 'Int16', 'height': 'Int16', 'id': str, 'productUrl': str, 
+            'baseUrl': str, 'mimeType': str, 'filename': str, 'cameraMake': str,
+            'cameraModel': str, 'exposureTime': str, 'status': str
+        }
+        photos = photos.astype(dtypes)
 
         return photos
+    
+    def save_media_item(self, id: str, filename: str):
+        """
+        Get the specified media item and saves it to disk.
+
+        Arguments:
+            id (str): The id of the media item to get.
+            filename (str): The filename to save the media item as.
+        """
+        # Get the image data. This needs to be retrieved again rather than taken
+        # from the dataframe returned by get_media_info as the base url provided
+        # by the google API is only valid for 60 mins.
+        img = self._api.mediaItems().get(mediaItemId=id).execute()
+        urllib.request.urlretrieve(img['baseUrl'], filename)
 
             
 cloud_providers = {
